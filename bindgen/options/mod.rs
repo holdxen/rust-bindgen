@@ -1988,6 +1988,17 @@ options! {
         },
         as_args: "--dynamic-link-require-all",
     },
+    /// whether wrap libloading arch std::sync::Arc when `dynamic_library_name` is set.
+    arc_libloading: bool {
+        methods: {
+            /// Set whether to wrap __library with std::sync::Arc.
+            pub fn arc_libloading(mut self, arc_libloading: bool) -> Self {
+                self.options.arc_libloading = arc_libloading;
+                self
+            }
+        },
+        as_args: "--dynamic-link-require-all",
+    },
     /// Whether to only make generated bindings `pub` if the items would be publicly accessible by
     /// C++.
     respect_cxx_access_specs: bool {

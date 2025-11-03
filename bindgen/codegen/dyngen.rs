@@ -89,15 +89,33 @@ impl DynamicItems {
             quote!(::libloading::Library::new(path))
         };
 
+        let wrap_arc = if ctx.options().wrap_unsafe_ops {
+            quote!(let library = ::std::sync::Arc::new(library);)
+        } else {
+            quote!( )
+        };
+
         let from_library = if ctx.options().wrap_unsafe_ops {
             quote!(unsafe { Self::from_library(library) })
         } else {
             quote!(Self::from_library(library))
         };
 
+        let library = if ctx.options().arc_libloading {
+            quote! { __library: ::std::sync::Arc<::libloading::Library> }
+        }  else {
+            quote! { __library: ::libloading::Library }
+        };
+
+        let into_library = if ctx.options().arc_libloading {
+            quote! { Into<::std::sync::Arc<::libloading::Library>> }
+        }  else {
+            quote! { Into<::libloading::Library> }
+        };
+
         quote! {
             pub struct #lib_ident {
-                __library: ::libloading::Library,
+                #library,
                 #(#struct_members)*
             }
 
@@ -107,13 +125,14 @@ impl DynamicItems {
                 ) -> Result<Self, ::libloading::Error>
                 where P: AsRef<::std::ffi::OsStr> {
                     let library = #library_new?;
+                    #wrap_arc
                     #from_library
                 }
 
                 pub unsafe fn from_library<L>(
                     library: L
                 ) -> Result<Self, ::libloading::Error>
-                where L: Into<::libloading::Library> {
+                where L: #into_library {
                     let __library = library.into();
                     #( #constructor_inits )*
                     Ok(#lib_ident {
