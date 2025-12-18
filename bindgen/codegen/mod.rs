@@ -993,13 +993,6 @@ impl CodeGenerator for Type {
                             layout.size,
                             ctx.target_pointer_size(),
                             );
-                        assert_eq!(
-                            layout.align,
-                            ctx.target_pointer_size(),
-                            "Target platform requires `--no-size_t-is-usize`. The alignment of `{spelling}` ({}) does not match the target pointer size ({})",
-                            layout.align,
-                            ctx.target_pointer_size(),
-                        );
                     }
                     return;
                 }
@@ -1599,6 +1592,28 @@ impl FieldCodegen<'_> for FieldData {
                     syn::parse_quote! { __IncompleteArrayField<#inner> }
                 }
             }
+        } else if let TypeKind::Comp(ref comp) = field_ty.kind() {
+            // Nested FAM: the field is a struct that itself has a FAM
+            // Only treat as FAM if it's the last field
+            if ctx.options().flexarray_dst &&
+                last_field &&
+                comp.flex_array_member(ctx).is_some()
+            {
+                let layout = parent_item.expect_type().layout(ctx);
+                let is_packed = parent.is_packed(ctx, layout.as_ref());
+                struct_layout.saw_flexible_array();
+
+                // For nested FAMs, we need to parameterize the field type with FAM
+                // For packed structs, wrap in ManuallyDrop
+                if is_packed {
+                    let prefix = ctx.trait_prefix();
+                    syn::parse_quote! { ::#prefix::mem::ManuallyDrop<#ty<FAM>> }
+                } else {
+                    syn::parse_quote! { #ty<FAM> }
+                }
+            } else {
+                ty
+            }
         } else {
             ty
         };
@@ -1771,9 +1786,7 @@ impl Bitfield {
         let prefix = ctx.trait_prefix();
 
         ctor_impl.append_all(quote! {
-            __bindgen_bitfield_unit.set(
-                #offset,
-                #width,
+            __bindgen_bitfield_unit.set_const::<#offset, #width>(
                 {
                     let #param_name: #bitfield_int_ty = unsafe {
                         ::#prefix::mem::transmute(#param_name)
@@ -2134,7 +2147,7 @@ impl<'a> FieldCodegen<'a> for Bitfield {
                 #access_spec fn #getter_name(&self) -> #bitfield_ty {
                     unsafe {
                         ::#prefix::mem::transmute(
-                            self.#unit_field_ident.get(#offset, #width)
+                            self.#unit_field_ident.get_const::<#offset, #width>()
                                 as #bitfield_int_ty
                         )
                     }
@@ -2144,9 +2157,7 @@ impl<'a> FieldCodegen<'a> for Bitfield {
                 #access_spec fn #setter_name(&mut self, val: #bitfield_ty) {
                     unsafe {
                         let val: #bitfield_int_ty = ::#prefix::mem::transmute(val);
-                        self.#unit_field_ident.set(
-                            #offset,
-                            #width,
+                        self.#unit_field_ident.set_const::<#offset, #width>(
                             val as u64
                         )
                     }
@@ -2157,10 +2168,8 @@ impl<'a> FieldCodegen<'a> for Bitfield {
                 #[inline]
                 #access_spec unsafe fn #raw_getter_name(this: *const Self) -> #bitfield_ty {
                     unsafe {
-                        ::#prefix::mem::transmute(<#unit_field_ty>::raw_get(
+                        ::#prefix::mem::transmute(<#unit_field_ty>::raw_get_const::<#offset, #width>(
                             ::#prefix::ptr::addr_of!((*this).#unit_field_ident),
-                            #offset,
-                            #width,
                         ) as #bitfield_int_ty)
                     }
                 }
@@ -2169,10 +2178,8 @@ impl<'a> FieldCodegen<'a> for Bitfield {
                 #access_spec unsafe fn #raw_setter_name(this: *mut Self, val: #bitfield_ty) {
                     unsafe {
                         let val: #bitfield_int_ty = ::#prefix::mem::transmute(val);
-                        <#unit_field_ty>::raw_set(
+                        <#unit_field_ty>::raw_set_const::<#offset, #width>(
                             ::#prefix::ptr::addr_of_mut!((*this).#unit_field_ident),
-                            #offset,
-                            #width,
                             val as u64,
                         )
                     }
@@ -2528,7 +2535,17 @@ impl CodeGenerator for CompInfo {
             }
         }
 
-        let derivable_traits = derives_of_item(item, ctx, packed);
+        let derivable_traits = if self.is_forward_declaration() {
+            // The only trait we can derive for forward declared types is `Debug`,
+            // since we don't know anything about the layout or type.
+            let mut derivable_traits = DerivableTraits::empty();
+            if !item.annotations().disallow_debug() {
+                derivable_traits |= DerivableTraits::DEBUG;
+            }
+            derivable_traits
+        } else {
+            derives_of_item(item, ctx, packed)
+        };
         if !derivable_traits.contains(DerivableTraits::DEBUG) {
             needs_debug_impl = ctx.options().derive_debug &&
                 ctx.options().impl_debug &&
@@ -4107,9 +4124,10 @@ impl FromStr for AliasVariation {
 }
 
 /// Enum for how non-`Copy` `union`s should be translated.
-#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum NonCopyUnionStyle {
     /// Wrap members in a type generated by `bindgen`.
+    #[default]
     BindgenWrapper,
     /// Wrap members in [`::core::mem::ManuallyDrop`].
     ///
@@ -4126,12 +4144,6 @@ impl fmt::Display for NonCopyUnionStyle {
         };
 
         s.fmt(f)
-    }
-}
-
-impl Default for NonCopyUnionStyle {
-    fn default() -> Self {
-        Self::BindgenWrapper
     }
 }
 

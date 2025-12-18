@@ -167,22 +167,17 @@ impl Default for CodegenConfig {
 }
 
 /// Formatting tools that can be used to format the bindings
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum Formatter {
     /// Do not format the bindings.
     None,
     /// Use `rustfmt` to format the bindings.
+    #[default]
     Rustfmt,
     #[cfg(feature = "prettyplease")]
     /// Use `prettyplease` to format the bindings.
     Prettyplease,
-}
-
-impl Default for Formatter {
-    fn default() -> Self {
-        Self::Rustfmt
-    }
 }
 
 impl FromStr for Formatter {
@@ -937,12 +932,12 @@ impl Bindings {
             .truncate(true)
             .create(true)
             .open(path.as_ref())?;
-        self.write(Box::new(file))?;
+        self.write(file)?;
         Ok(())
     }
 
     /// Write these bindings as source text to the given `Write`able.
-    pub fn write<'a>(&self, mut writer: Box<dyn Write + 'a>) -> io::Result<()> {
+    pub fn write(&self, mut writer: impl Write) -> io::Result<()> {
         const NL: &str = if cfg!(windows) { "\r\n" } else { "\n" };
 
         if !self.options.disable_header_comment {
@@ -1095,7 +1090,7 @@ fn rustfmt_non_fatal_error_diagnostic(msg: &str, _options: &BindgenOptions) {
 impl std::fmt::Display for Bindings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut bytes = vec![];
-        self.write(Box::new(&mut bytes) as Box<dyn Write>)
+        self.write(&mut bytes)
             .expect("writing to a vec cannot fail");
         f.write_str(
             std::str::from_utf8(&bytes)
